@@ -118,6 +118,11 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
   const [joinRequestName, setJoinRequestName] = useState("");
   const [permissionStatus, setPermissionStatus] = useState<"checking" | "request_sent" | "approved" | "denied" | null>(null);
 
+  // Post-debate state
+  const [showResultsModal, setShowResultsModal] = useState(false);
+  const [debateAnalysis, setDebateAnalysis] = useState<{winner: "a" | "b" | "tie"; aScore: number; bScore: number; summary: string} | null>(null);
+  const [analyzingResults, setAnalyzingResults] = useState(false);
+
   // Reset permission state on mount (helpful during development)
   useEffect(() => {
     setPermissionStatus(null);
@@ -260,6 +265,13 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
     setPermissionStatus(null);
   }, [user, debate]);
 
+  // Trigger final analysis when debate is completed
+  useEffect(() => {
+    if (debate?.status === "completed" && !debateAnalysis && !analyzingResults) {
+      analyzeDebateResults();
+    }
+  }, [debate?.status, debateAnalysis, analyzingResults]);
+
   // Subscribe to join request updates for current user
   useEffect(() => {
     if (!user || !debate || !debate.joinRequests) return;
@@ -321,6 +333,67 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
 
     return () => clearInterval(timer);
   }, [debate?.currentRoundTimeLeft, debate?.roundStartedAt, debate?.currentTurn, debate?.status]);
+
+  const analyzeDebateResults = async () => {
+    if (!debate || !debateArguments.length) return;
+    
+    setAnalyzingResults(true);
+    console.log("🏆 Analyzing final debate results...");
+    
+    try {
+      // Separate arguments by position
+      const aArguments = debateArguments
+        .filter(arg => arg.position === "a")
+        .map(arg => ({ text: arg.text, score: arg.aiScore || 0 }));
+      
+      const bArguments = debateArguments
+        .filter(arg => arg.position === "b")
+        .map(arg => ({ text: arg.text, score: arg.aiScore || 0 }));
+      
+      console.log("🏆 Arguments summary:", { aCount: aArguments.length, bCount: bArguments.length });
+      
+      // Call the AI analysis API
+      const response = await fetch("/api/analyze-debate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: debate.topic,
+          positionA: debate.positionA,
+          positionB: debate.positionB,
+          aArguments,
+          bArguments,
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log("🏆 Debate analysis complete:", result);
+        console.log("🏆 Analysis data:", result.analysis);
+        console.log("🏆 Winner value:", result.analysis?.winner);
+        setDebateAnalysis(result.analysis);
+        setShowResultsModal(true);
+      } else {
+        const error = await response.json();
+        console.error("❌ Debate analysis failed:", error);
+        // Show results modal even if analysis fails, with basic scoring
+        const aAvg = aArguments.reduce((sum, arg) => sum + arg.score, 0) / aArguments.length || 0;
+        const bAvg = bArguments.reduce((sum, arg) => sum + arg.score, 0) / bArguments.length || 0;
+        
+        setDebateAnalysis({
+          winner: aAvg > bAvg ? "a" : bAvg > aAvg ? "b" : "tie",
+          aScore: aAvg,
+          bScore: bAvg,
+          summary: `Analysis failed. Basic scoring: Position A averaged ${aAvg.toFixed(1)}, Position B averaged ${bAvg.toFixed(1)}.`
+        });
+        setShowResultsModal(true);
+      }
+    } catch (error) {
+      console.error("Error analyzing debate:", error);
+      setShowResultsModal(true); // Show modal even on error
+    } finally {
+      setAnalyzingResults(false);
+    }
+  };
 
   const autoSkipTurn = async () => {
     if (!debate || !debate.currentTurn) return;
@@ -642,7 +715,7 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
 
     try {
       // Generate a unique ID for anonymous users
-      const requestId = user?.uid || `anonymous_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const requestId = user?.uid || `anonymous_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
       
       const joinRequest = {
         id: requestId,
@@ -1434,6 +1507,163 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
           </CardContent>
         </Card>
       )}
+
+      {/* Debate Results Modal */}
+      <Dialog 
+        open={showResultsModal} 
+        onClose={() => setShowResultsModal(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle sx={{ textAlign: "center", pb: 1 }}>
+          <Typography variant="h4" sx={{ fontWeight: "bold", color: "primary.main" }}>
+            🏆 Debate Complete!
+          </Typography>
+        </DialogTitle>
+        
+        <DialogContent sx={{ pt: 2 }}>
+          {analyzingResults ? (
+            <Box sx={{ textAlign: "center", py: 4 }}>
+              <Typography variant="h6" sx={{ mb: 2 }}>
+                🤖 Analyzing debate results...
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Our AI is evaluating all arguments and determining the winner
+              </Typography>
+            </Box>
+          ) : debateAnalysis ? (
+            <Box>
+              {/* Winner Declaration */}
+              <Card sx={{ 
+                p: 3, 
+                mb: 3, 
+                textAlign: "center", 
+                background: debateAnalysis.winner === "tie" 
+                  ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
+                  : debateAnalysis.winner === "a" 
+                    ? "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)" 
+                    : debateAnalysis.winner === "b"
+                      ? "linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)"
+                      : "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
+                color: "white"
+              }}>
+                <Typography variant="h5" sx={{ fontWeight: "bold", mb: 2 }}>
+                  {debateAnalysis.winner === "tie" 
+                    ? "🤝 It's a Tie!" 
+                    : debateAnalysis.winner 
+                      ? `🎉 Winner: Position ${debateAnalysis.winner.toUpperCase()}`
+                      : "🏁 Debate Complete"
+                  }
+                </Typography>
+                
+                <Box sx={{ display: "flex", justifyContent: "space-around", mb: 2 }}>
+                  <Box>
+                    <Typography variant="h6">{debate?.participants?.a?.alias || "Position A"}</Typography>
+                    <Typography variant="h4" sx={{ fontWeight: "bold" }}>
+                      {debateAnalysis.aScore?.toFixed(1) || "0.0"}/10
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="h6">{debate?.participants?.b?.alias || "Position B"}</Typography>
+                    <Typography variant="h4" sx={{ fontWeight: "bold" }}>
+                      {debateAnalysis.bScore?.toFixed(1) || "0.0"}/10
+                    </Typography>
+                  </Box>
+                </Box>
+              </Card>
+
+              {/* AI Analysis Summary */}
+              <Card sx={{ p: 3, mb: 3 }}>
+                <Typography variant="h6" sx={{ mb: 2, fontWeight: "bold" }}>
+                  🤖 AI Analysis
+                </Typography>
+                <Typography variant="body1" sx={{ lineHeight: 1.6 }}>
+                  {debateAnalysis.summary || "Analysis completed successfully."}
+                </Typography>
+              </Card>
+
+              {/* Action Buttons */}
+              <Box sx={{ display: "flex", gap: 2, justifyContent: "center", flexWrap: "wrap" }}>
+                {/* Extend Discussion Button */}
+                <Button
+                  variant="contained"
+                  color="primary"
+                  size="large"
+                  sx={{ minWidth: 200 }}
+                  onClick={() => {
+                    // TODO: Implement extension payment logic
+                    alert("Extension feature coming soon! This will require a $1.99 payment or subscription.");
+                  }}
+                >
+                  🚀 Extend Discussion
+                  <Typography variant="caption" sx={{ display: "block", fontSize: "0.7rem" }}>
+                    $1.99 or Premium
+                  </Typography>
+                </Button>
+
+                {/* Appeal Result Button */}
+                <Button
+                  variant="outlined"
+                  color="warning"
+                  size="large"
+                  sx={{ minWidth: 200 }}
+                  onClick={() => {
+                    // TODO: Implement appeal functionality
+                    alert("Appeal functionality will be added soon!");
+                  }}
+                >
+                  ⚖️ Appeal Result
+                  <Typography variant="caption" sx={{ display: "block", fontSize: "0.7rem" }}>
+                    Challenge AI decision
+                  </Typography>
+                </Button>
+
+                {/* Share Results Button */}
+                <Button
+                  variant="outlined"
+                  color="secondary"
+                  size="large"
+                  sx={{ minWidth: 200 }}
+                  onClick={() => {
+                    // TODO: Implement sharing functionality
+                    const shareText = `I just completed a debate on "${debate?.topic}" and ${
+                      debateAnalysis.winner === "tie" ? "it was a tie" : 
+                      debateAnalysis.winner === getUserPosition() ? "I won" : "my opponent won"
+                    }! Check out DebateAI.`;
+                    if (navigator.share) {
+                      navigator.share({ text: shareText });
+                    } else {
+                      alert("Share: " + shareText);
+                    }
+                  }}
+                >
+                  📤 Share Results
+                </Button>
+              </Box>
+            </Box>
+          ) : (
+            <Box sx={{ textAlign: "center", py: 4 }}>
+              <Typography variant="h6" color="error">
+                Unable to analyze debate results
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                The debate has ended but analysis failed
+              </Typography>
+            </Box>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ justifyContent: "center", pb: 3 }}>
+          <Button 
+            onClick={() => setShowResultsModal(false)} 
+            variant="contained"
+            color="primary"
+            size="large"
+          >
+            Close Results
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

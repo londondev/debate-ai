@@ -150,7 +150,18 @@ Consider: logical consistency, evidence quality, addressing opponent's points, o
       throw new Error("No response from OpenAI");
     }
 
-    return JSON.parse(content) as DebateAnalysis;
+    console.log("🤖 Raw AI response:", content);
+    
+    const parsed = JSON.parse(content) as DebateAnalysis;
+    
+    // Validate the response has required fields
+    if (!parsed.winner || !["a", "b", "tie"].includes(parsed.winner)) {
+      console.error("🚨 Invalid winner value:", parsed.winner);
+      throw new Error(`Invalid AI response: winner must be 'a', 'b', or 'tie', got: ${parsed.winner}`);
+    }
+    
+    console.log("✅ Valid AI analysis:", parsed);
+    return parsed;
   } catch (error) {
     console.error("Error analyzing debate:", error);
 
