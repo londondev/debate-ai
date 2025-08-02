@@ -29,6 +29,7 @@ export default function CreateDebate({ onDebateCreated }: CreateDebateProps) {
         isPublic: true, // Default to public
         status: "setup", // New status for setting up positions
         participants: {},
+        joinRequests: {}, // Initialize empty join requests
         createdAt: serverTimestamp(),
         timeLimit: 15 * 60, // 15 minutes in seconds
         isExtended: false,

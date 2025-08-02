@@ -24,8 +24,19 @@ import {
   FormControlLabel,
   Box,
   IconButton,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Alert,
+  Avatar,
+  List,
+  ListItem,
+  ListItemAvatar,
+  ListItemText,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import AuthButton from "./AuthButton";
 
 interface DebateRoomProps {
   debateId: string;
@@ -58,6 +69,15 @@ interface Argument {
   };
 }
 
+interface JoinRequest {
+  id: string;
+  userId: string;
+  userName: string;
+  userPhoto: string;
+  requestedAt: any;
+  status: "pending" | "approved" | "denied";
+}
+
 interface Debate {
   id: string;
   topic: string;
@@ -72,6 +92,7 @@ interface Debate {
   isExtended: boolean;
   createdAt: any;
   creatorId: string;
+  joinRequests?: Record<string, JoinRequest>;
 }
 
 export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
@@ -88,6 +109,11 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
   const [positionAStatement, setPositionAStatement] = useState("");
   const [positionBStatement, setPositionBStatement] = useState("");
   const [isPublic, setIsPublic] = useState(true);
+
+  // Permission state
+  const [showJoinRequestModal, setShowJoinRequestModal] = useState(false);
+  const [joinRequestName, setJoinRequestName] = useState("");
+  const [permissionStatus, setPermissionStatus] = useState<"checking" | "request_sent" | "approved" | "denied" | null>(null);
 
   // Subscribe to debate updates
   useEffect(() => {
@@ -136,6 +162,81 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
     }
   }, [user, debate]);
 
+  // Check user permission when debate loads
+  useEffect(() => {
+    console.log("🔍 Permission check start:", { user: !!user, debate: !!debate });
+    
+    if (!debate) return;
+    
+    // Handle signed-in users
+    if (user) {
+      console.log("🔍 Permission check (signed-in user):", {
+        userId: user.uid,
+        creatorId: debate.creatorId,
+        participants: debate.participants,
+        joinRequests: debate.joinRequests
+      });
+
+      const isCreator = user.uid === debate.creatorId;
+      const isParticipant = Object.values(debate.participants).some(p => p.uid === user.uid);
+      
+      console.log("👤 User status:", { isCreator, isParticipant });
+      
+      if (isCreator || isParticipant) {
+        // User has access
+        console.log("✅ User approved (creator or participant)");
+        setPermissionStatus("approved");
+        return;
+      }
+
+      // Check if user has pending/approved/denied request
+      const existingRequest = debate.joinRequests?.[user.uid];
+      console.log("📝 Existing request:", existingRequest);
+      
+      if (existingRequest) {
+        console.log("📋 Setting status from existing request:", existingRequest.status);
+        setPermissionStatus(existingRequest.status === "pending" ? "request_sent" : existingRequest.status);
+        return;
+      }
+    } else {
+      // Check for anonymous user requests in localStorage
+      const storedRequestId = localStorage.getItem(`debate_${debateId}_requestId`);
+      if (storedRequestId && debate.joinRequests?.[storedRequestId]) {
+        const existingRequest = debate.joinRequests[storedRequestId];
+        console.log("📝 Anonymous request found:", existingRequest);
+        setPermissionStatus(existingRequest.status === "pending" ? "request_sent" : existingRequest.status);
+        return;
+      }
+    }
+
+    // For anonymous users or signed-in users without access
+    // Check if debate is full (2 participants already)
+    const participantCount = Object.keys(debate.participants).length;
+    console.log("👥 Participant count:", participantCount);
+    
+    if (participantCount >= 2) {
+      // Debate is full, deny access
+      console.log("❌ Debate full, denying access");
+      setPermissionStatus("denied");
+      return;
+    }
+
+    // New user (anonymous or signed-in) needs to request permission
+    console.log("🔔 New user, showing join modal");
+    setShowJoinRequestModal(true);
+    setPermissionStatus(null);
+  }, [user, debate]);
+
+  // Subscribe to join request updates for current user
+  useEffect(() => {
+    if (!user || !debate || !debate.joinRequests) return;
+
+    const currentUserRequest = debate.joinRequests[user.uid];
+    if (currentUserRequest && currentUserRequest.status !== "pending") {
+      setPermissionStatus(currentUserRequest.status);
+    }
+  }, [user, debate]);
+
   // Timer countdown
   useEffect(() => {
     if (timeLeft <= 0 || !debate || debate.status !== "active") return;
@@ -177,7 +278,7 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
 
       const bothPlayersJoined = Object.keys(updatedParticipants).length === 2;
 
-      await updateDoc(doc(db, "debates", debateId), {
+      const updateData: any = {
         [`participants.${availablePosition}`]: {
           uid: user.uid,
           name: user.displayName,
@@ -189,7 +290,14 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
           positionStatement.trim(),
         isPublic: isPublic,
         status: bothPlayersJoined ? "ready_to_start" : "waiting_for_players",
-      });
+      };
+
+      // Remove the join request since user is now joining
+      if (debate.joinRequests?.[user.uid]) {
+        updateData[`joinRequests.${user.uid}`] = null;
+      }
+
+      await updateDoc(doc(db, "debates", debateId), updateData);
 
       console.log(`✅ Joined as Position ${availablePosition.toUpperCase()}`);
     } catch (error) {
@@ -318,6 +426,63 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
     return currentRoundArgs.length >= 2;
   };
 
+  const requestJoinPermission = async () => {
+    if (!debate || !joinRequestName.trim()) return;
+
+    try {
+      // Generate a unique ID for anonymous users
+      const requestId = user?.uid || `anonymous_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      const joinRequest = {
+        id: requestId,
+        userId: requestId,
+        userName: joinRequestName.trim(),
+        userPhoto: user?.photoURL || "",
+        requestedAt: serverTimestamp(),
+        status: "pending" as const,
+        isAnonymous: !user
+      };
+
+      // For existing debates without joinRequests field, initialize it
+      const updateData: any = {};
+      if (!debate.joinRequests) {
+        updateData.joinRequests = {
+          [requestId]: joinRequest
+        };
+      } else {
+        updateData[`joinRequests.${requestId}`] = joinRequest;
+      }
+
+      await updateDoc(doc(db, "debates", debateId), updateData);
+
+      // Store the request ID for anonymous users
+      if (!user) {
+        localStorage.setItem(`debate_${debateId}_requestId`, requestId);
+      }
+
+      setPermissionStatus("request_sent");
+      setShowJoinRequestModal(false);
+      console.log("✅ Join request sent");
+    } catch (error) {
+      console.error("Error sending join request:", error);
+      alert("Failed to send join request. Please try again.");
+    }
+  };
+
+  const handleJoinRequest = async (userId: string, action: "approve" | "deny") => {
+    if (!debate) return;
+
+    try {
+      await updateDoc(doc(db, "debates", debateId), {
+        [`joinRequests.${userId}.status`]: action === "approve" ? "approved" : "denied"
+      });
+
+      console.log(`✅ Join request ${action}d for user ${userId}`);
+    } catch (error) {
+      console.error(`Error ${action}ing join request:`, error);
+    }
+  };
+
   const isMyTurn = (): boolean => {
     return user?.uid === debate?.currentTurn;
   };
@@ -362,6 +527,89 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
   const bothPlayersJoined =
     debate && Object.keys(debate.participants).length === 2;
   const positionsSet = debate?.positionA && debate?.positionB;
+
+  // Handle permission states
+  if (permissionStatus === "request_sent") {
+    return (
+      <Box sx={{ maxWidth: "600px", mx: "auto", p: 3, textAlign: "center" }}>
+        <Button
+          startIcon={<ArrowBackIcon />}
+          onClick={onBack}
+          sx={{ mb: 3, alignSelf: "flex-start" }}
+        >
+          Back
+        </Button>
+        <Card sx={{ p: 4 }}>
+          <Typography variant="h5" sx={{ mb: 2 }}>
+            Permission Request Sent
+          </Typography>
+          <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+            Your request to join "{debate.topic}" has been sent to the creator. 
+            Please wait for approval.
+          </Typography>
+          <Box sx={{ display: "flex", justifyContent: "center", mb: 2 }}>
+            <Typography variant="body2" color="primary">
+              ⏳ Waiting for approval...
+            </Typography>
+          </Box>
+        </Card>
+      </Box>
+    );
+  }
+
+  if (permissionStatus === "denied") {
+    const participantCount = Object.keys(debate?.participants || {}).length;
+    const isFull = participantCount >= 2;
+    
+    return (
+      <Box sx={{ maxWidth: "600px", mx: "auto", p: 3, textAlign: "center" }}>
+        <Button
+          startIcon={<ArrowBackIcon />}
+          onClick={onBack}
+          sx={{ mb: 3, alignSelf: "flex-start" }}
+        >
+          Back
+        </Button>
+        <Card sx={{ p: 4 }}>
+          <Typography variant="h5" color="error" sx={{ mb: 2 }}>
+            {isFull ? "Debate Full" : "Access Denied"}
+          </Typography>
+          <Typography variant="body1" color="text.secondary">
+            {isFull 
+              ? "This debate already has 2 participants and is full."
+              : "The creator has denied your request to join this debate."
+            }
+          </Typography>
+        </Card>
+      </Box>
+    );
+  }
+
+
+  // Don't show main UI until permission is resolved
+  if (permissionStatus !== "approved" && permissionStatus !== null) {
+    console.log("🔄 Showing permission check screen, status:", permissionStatus);
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minHeight: "400px",
+        }}
+      >
+        <Typography variant="h6">Checking permissions... (Status: {permissionStatus})</Typography>
+      </Box>
+    );
+  }
+
+  // Debug logging
+  console.log("🎯 RENDER STATE:", {
+    showJoinRequestModal,
+    permissionStatus,
+    user: user?.uid,
+    debate: debate?.id
+  });
 
   return (
     <Box sx={{ maxWidth: "1200px", mx: "auto", p: 3 }}>
@@ -830,6 +1078,79 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
             </Card>
           )}
         </Box>
+      )}
+
+      {/* Join Request Modal */}
+      <Dialog open={showJoinRequestModal} onClose={() => setShowJoinRequestModal(false)}>
+        <DialogTitle>Join Debate</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mb: 3 }}>
+            You're about to request permission to join "{debate?.topic}". Please enter your name:
+          </Typography>
+          <TextField
+            fullWidth
+            label="Your Name"
+            value={joinRequestName}
+            onChange={(e) => setJoinRequestName(e.target.value)}
+            placeholder="Enter your name"
+            autoFocus
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowJoinRequestModal(false)}>Cancel</Button>
+          <Button 
+            onClick={requestJoinPermission} 
+            variant="contained"
+            disabled={!joinRequestName.trim()}
+          >
+            Send Request
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Creator's Join Request Approval UI */}
+      {isCreator && debate?.joinRequests && Object.values(debate.joinRequests).some(req => req.status === "pending") && (
+        <Card sx={{ position: "fixed", bottom: 20, right: 20, minWidth: 300, zIndex: 1000 }}>
+          <CardContent>
+            <Typography variant="h6" sx={{ mb: 2 }}>
+              🔔 Join Requests
+            </Typography>
+            <List dense>
+              {Object.values(debate.joinRequests)
+                .filter(req => req.status === "pending")
+                .map((request) => (
+                  <ListItem key={request.userId} sx={{ px: 0 }}>
+                    <ListItemAvatar>
+                      <Avatar src={request.userPhoto} alt={request.userName}>
+                        {request.userName[0]}
+                      </Avatar>
+                    </ListItemAvatar>
+                    <ListItemText
+                      primary={request.userName}
+                      secondary="wants to join as debater"
+                    />
+                    <Box sx={{ ml: 1 }}>
+                      <Button
+                        size="small"
+                        color="success"
+                        onClick={() => handleJoinRequest(request.userId, "approve")}
+                        sx={{ mr: 1 }}
+                      >
+                        ✓
+                      </Button>
+                      <Button
+                        size="small"
+                        color="error"
+                        onClick={() => handleJoinRequest(request.userId, "deny")}
+                      >
+                        ✗
+                      </Button>
+                    </Box>
+                  </ListItem>
+                ))}
+            </List>
+          </CardContent>
+        </Card>
       )}
     </Box>
   );
