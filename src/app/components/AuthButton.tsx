@@ -6,7 +6,7 @@ import {
   onAuthStateChanged,
   User,
 } from "firebase/auth";
-import { auth, googleProvider, db } from "@/lib/firebase";
+import { auth, googleProvider, db } from "@/app/lib/firebase";
 import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { useEffect, useState } from "react";
 

@@ -1,21 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRouter } from "next/navigation";
 import AuthButton from "./components/AuthButton";
 import CreateDebate from "./components/CreateDebate";
-import DebateRoom from "./components/DebateRoom";
+import { createSlug } from "./lib/utils";
 
 export default function Home() {
-  const [currentDebateId, setCurrentDebateId] = useState<string | null>(null);
-
-  if (currentDebateId) {
-    return (
-      <DebateRoom
-        debateId={currentDebateId}
-        onBack={() => setCurrentDebateId(null)}
-      />
-    );
-  }
+  const router = useRouter();
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-8">
@@ -37,9 +28,11 @@ export default function Home() {
           {/* Create Debate */}
           <div className="mb-8">
             <CreateDebate
-              onDebateCreated={(debateId) => {
+              onDebateCreated={(debateId, topic) => {
                 console.log("Debate created with ID:", debateId);
-                setCurrentDebateId(debateId);
+                const slug = createSlug(topic);
+                const slugId = `${slug}-${debateId}`;
+                router.push(`/debate/${slugId}`);
               }}
             />
           </div>

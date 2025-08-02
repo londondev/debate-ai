@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { auth, db } from "../../lib/firebase";
+import { auth, db } from "../lib/firebase";
 import {
   doc,
   onSnapshot,
@@ -13,6 +13,19 @@ import {
   orderBy,
 } from "firebase/firestore";
 import { useAuthState } from "react-firebase-hooks/auth";
+import {
+  Button,
+  TextField,
+  Card,
+  CardContent,
+  Typography,
+  Grid,
+  Checkbox,
+  FormControlLabel,
+  Box,
+  IconButton,
+} from "@mui/material";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 
 interface DebateRoomProps {
   debateId: string;
@@ -22,8 +35,9 @@ interface DebateRoomProps {
 interface Participant {
   uid: string;
   name: string;
+  alias: string;
   photoURL: string;
-  position: "pro" | "con";
+  position: "a" | "b";
 }
 
 interface Argument {
@@ -31,14 +45,24 @@ interface Argument {
   text: string;
   authorId: string;
   authorName: string;
-  position: "pro" | "con";
+  authorAlias: string;
+  position: "a" | "b";
   timestamp: any;
   round: number;
+  aiScore?: number;
+  aiAnalysis?: {
+    reasoning: string;
+    strengths: string[];
+    weaknesses: string[];
+    logicalFallacies: string[];
+  };
 }
 
 interface Debate {
   id: string;
   topic: string;
+  positionA: string;
+  positionB: string;
   participants: Record<string, Participant>;
   status: string;
   currentTurn: string | null;
@@ -47,6 +71,7 @@ interface Debate {
   timeLimit: number;
   isExtended: boolean;
   createdAt: any;
+  creatorId: string;
 }
 
 export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
@@ -56,6 +81,13 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
   const [currentArgument, setCurrentArgument] = useState("");
   const [timeLeft, setTimeLeft] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Setup state
+  const [userAlias, setUserAlias] = useState("");
+  const [positionAStatement, setPositionAStatement] = useState("");
+  const [positionBStatement, setPositionBStatement] = useState("");
+  const [isPublic, setIsPublic] = useState(true);
 
   // Subscribe to debate updates
   useEffect(() => {
@@ -64,8 +96,13 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
     const debateRef = doc(db, "debates", debateId);
     const unsubscribe = onSnapshot(debateRef, (doc) => {
       if (doc.exists()) {
-        setDebate({ id: doc.id, ...doc.data() } as Debate);
-        setTimeLeft(doc.data().timeLimit || 900); // 15 minutes default
+        const debateData = { id: doc.id, ...doc.data() } as Debate;
+        setDebate(debateData);
+        setTimeLeft(debateData.timeLimit || 900);
+
+        // Load existing position statements
+        if (debateData.positionA) setPositionAStatement(debateData.positionA);
+        if (debateData.positionB) setPositionBStatement(debateData.positionB);
       }
       setLoading(false);
     });
@@ -91,6 +128,14 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
     return () => unsubscribe();
   }, [debateId]);
 
+  // Initialize user alias with default - but don't override if user has typed something
+  useEffect(() => {
+    if (user && userAlias === "") {
+      const participantCount = Object.keys(debate?.participants || {}).length;
+      setUserAlias(`User ${participantCount + 1}`);
+    }
+  }, [user, debate]);
+
   // Timer countdown
   useEffect(() => {
     if (timeLeft <= 0 || !debate || debate.status !== "active") return;
@@ -98,7 +143,6 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
     const timer = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
-          // Time's up logic
           return 0;
         }
         return prev - 1;
@@ -108,43 +152,123 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
     return () => clearInterval(timer);
   }, [timeLeft, debate]);
 
-  const joinDebate = async () => {
-    if (!user || !debate) return;
+  const joinDebateSimple = async () => {
+    if (!user || !userAlias.trim() || !debate) return;
 
-    // Determine which position is available
-    const availablePosition = debate.participants.pro ? "con" : "pro";
+    try {
+      // Determine available position
+      const availablePosition = !debate.participants.a ? "a" : "b";
 
-    await updateDoc(doc(db, "debates", debateId), {
-      [`participants.${availablePosition}`]: {
-        uid: user.uid,
-        name: user.displayName,
-        photoURL: user.photoURL,
-        position: availablePosition,
-      },
-      status: "active",
-      currentTurn: debate.participants.pro
-        ? debate.participants.pro.uid
-        : user.uid,
-      round: 1,
-    });
+      // Get the position statement for this user
+      const positionStatement =
+        availablePosition === "a" ? positionAStatement : positionBStatement;
+      if (!positionStatement.trim()) return;
+
+      const updatedParticipants = {
+        ...debate.participants,
+        [availablePosition]: {
+          uid: user.uid,
+          name: user.displayName,
+          alias: userAlias.trim(),
+          photoURL: user.photoURL,
+          position: availablePosition,
+        },
+      };
+
+      const bothPlayersJoined = Object.keys(updatedParticipants).length === 2;
+
+      await updateDoc(doc(db, "debates", debateId), {
+        [`participants.${availablePosition}`]: {
+          uid: user.uid,
+          name: user.displayName,
+          alias: userAlias.trim(),
+          photoURL: user.photoURL,
+          position: availablePosition,
+        },
+        [`position${availablePosition.toUpperCase()}`]:
+          positionStatement.trim(),
+        isPublic: isPublic,
+        status: bothPlayersJoined ? "ready_to_start" : "waiting_for_players",
+      });
+
+      console.log(`✅ Joined as Position ${availablePosition.toUpperCase()}`);
+    } catch (error) {
+      console.error("Error joining debate:", error);
+    }
+  };
+
+  const startDebate = async () => {
+    if (!debate || Object.keys(debate.participants).length < 2) return;
+
+    try {
+      const firstPlayer = Object.values(debate.participants)[0];
+      await updateDoc(doc(db, "debates", debateId), {
+        status: "active",
+        currentTurn: firstPlayer.uid,
+        round: 1,
+      });
+      console.log("✅ Debate started!");
+    } catch (error) {
+      console.error("Error starting debate:", error);
+    }
   };
 
   const submitArgument = async () => {
-    if (!user || !debate || !currentArgument.trim()) return;
+    if (!user || !debate || !currentArgument.trim() || submitting) return;
 
     const userPosition = getUserPosition();
     if (!userPosition) return;
 
+    setSubmitting(true);
+
     try {
-      // Add argument to subcollection
-      await addDoc(collection(db, "debates", debateId, "arguments"), {
-        text: currentArgument.trim(),
-        authorId: user.uid,
-        authorName: user.displayName,
-        position: userPosition,
-        timestamp: serverTimestamp(),
-        round: debate.round,
+      const userParticipant = debate.participants[userPosition];
+      const argumentRef = await addDoc(
+        collection(db, "debates", debateId, "arguments"),
+        {
+          text: currentArgument.trim(),
+          authorId: user.uid,
+          authorName: user.displayName,
+          authorAlias: userParticipant?.alias || user.displayName,
+          position: userPosition,
+          timestamp: serverTimestamp(),
+          round: debate.round,
+        }
+      );
+
+      // Get previous arguments for context
+      const previousArgs = debateArguments
+        .filter((arg) => arg.round <= debate.round)
+        .map((arg) => ({ text: arg.text, position: arg.position }));
+
+      // Call AI scoring API
+      const response = await fetch("/api/score-argument", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          argument: currentArgument.trim(),
+          position: userPosition,
+          topic: debate.topic,
+          previousArguments: previousArgs,
+        }),
       });
+
+      const result = await response.json();
+      const aiScore = result.score;
+
+      // Update the argument with AI analysis
+      await updateDoc(
+        doc(db, "debates", debateId, "arguments", argumentRef.id),
+        {
+          aiScore: aiScore.score,
+          aiAnalysis: {
+            reasoning: aiScore.reasoning,
+            strengths: aiScore.strengths,
+            weaknesses: aiScore.weaknesses,
+            logicalFallacies: aiScore.logicalFallacies,
+          },
+        }
+      );
 
       // Update debate turn
       const nextTurn = getNextTurn();
@@ -157,16 +281,20 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
       });
 
       setCurrentArgument("");
+      console.log("✅ Argument submitted and scored:", aiScore.score);
     } catch (error) {
       console.error("Error submitting argument:", error);
+      alert("Failed to submit argument. Please try again.");
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const getUserPosition = (): "pro" | "con" | null => {
+  const getUserPosition = (): "a" | "b" | null => {
     if (!user || !debate) return null;
 
-    if (debate.participants.pro?.uid === user.uid) return "pro";
-    if (debate.participants.con?.uid === user.uid) return "con";
+    if (debate.participants.a?.uid === user.uid) return "a";
+    if (debate.participants.b?.uid === user.uid) return "b";
     return null;
   };
 
@@ -174,10 +302,10 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
     if (!debate || !user) return "";
 
     const currentUserPosition = getUserPosition();
-    if (currentUserPosition === "pro") {
-      return debate.participants.con?.uid || "";
+    if (currentUserPosition === "a") {
+      return debate.participants.b?.uid || "";
     } else {
-      return debate.participants.pro?.uid || "";
+      return debate.participants.a?.uid || "";
     }
   };
 
@@ -187,7 +315,7 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
     const currentRoundArgs = debateArguments.filter(
       (arg) => arg.round === debate.round
     );
-    return currentRoundArgs.length >= 2; // Both players have argued this round
+    return currentRoundArgs.length >= 2;
   };
 
   const isMyTurn = (): boolean => {
@@ -202,212 +330,507 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-xl">Loading debate...</div>
-      </div>
+      <Box
+        sx={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minHeight: "400px",
+        }}
+      >
+        <Typography variant="h6">Loading debate...</Typography>
+      </Box>
     );
   }
 
   if (!debate) {
     return (
-      <div className="text-center">
-        <div className="text-xl text-red-600 mb-4">Debate not found</div>
-        <button
-          onClick={onBack}
-          className="px-4 py-2 bg-gray-500 text-white rounded"
-        >
+      <Box sx={{ textAlign: "center" }}>
+        <Typography variant="h6" color="error" sx={{ mb: 2 }}>
+          Debate not found
+        </Typography>
+        <Button variant="contained" onClick={onBack}>
           Go Back
-        </button>
-      </div>
+        </Button>
+      </Box>
     );
   }
 
   const userPosition = getUserPosition();
-  const canJoin =
-    !userPosition && (!debate.participants.pro || !debate.participants.con);
+  const canJoin = !userPosition;
+  const isCreator = user?.uid === debate?.creatorId;
+  const bothPlayersJoined =
+    debate && Object.keys(debate.participants).length === 2;
+  const positionsSet = debate?.positionA && debate?.positionB;
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      {/* Header */}
-      <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-        <div className="flex justify-between items-start mb-4">
-          <button onClick={onBack} className="text-blue-500 hover:underline">
-            ← Back to Home
-          </button>
-          <div className="text-right">
-            <div className="text-2xl font-mono text-red-500">
+    <Box sx={{ maxWidth: "1200px", mx: "auto", p: 3 }}>
+      {/* Back Button */}
+      <Button
+        startIcon={<ArrowBackIcon />}
+        onClick={onBack}
+        sx={{ mb: 3, color: "primary.main" }}
+      >
+        Back
+      </Button>
+
+      {/* Setup Interface */}
+      {(debate.status === "setup" ||
+        debate.status === "waiting_for_players" ||
+        debate.status === "ready_to_start") && (
+        <Card sx={{ p: 4, maxWidth: "900px", mx: "auto" }}>
+          <CardContent>
+            {/* Debate Title */}
+            <Card variant="outlined" sx={{ mb: 3, p: 2 }}>
+              <Typography
+                variant="h5"
+                align="center"
+                sx={{ fontWeight: "medium" }}
+              >
+                {debate.topic}
+              </Typography>
+            </Card>
+
+            {/* Position Inputs */}
+            <Grid container spacing={4} sx={{ mb: 3 }}>
+              <Grid size={6}>
+                <Card
+                  variant="outlined"
+                  sx={{
+                    minHeight: "80px",
+                    display: "flex",
+                    alignItems: "center",
+                    p: 0,
+                  }}
+                >
+                  <input
+                    type="text"
+                    placeholder="My position placeholder"
+                    value={
+                      !userPosition
+                        ? !debate.participants.a
+                          ? positionAStatement
+                          : positionBStatement
+                        : userPosition === "a"
+                        ? positionAStatement
+                        : positionBStatement
+                    }
+                    onChange={(e) => {
+                      if (!userPosition) {
+                        if (!debate.participants.a) {
+                          setPositionAStatement(e.target.value);
+                        } else {
+                          setPositionBStatement(e.target.value);
+                        }
+                      }
+                    }}
+                    disabled={!!userPosition}
+                    maxLength={100}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      minHeight: "80px",
+                      border: "none",
+                      outline: "none",
+                      background: "transparent",
+                      textAlign: "center",
+                      fontSize: "1.2rem",
+                      padding: "20px",
+                      fontFamily: "inherit",
+                    }}
+                  />
+                </Card>
+              </Grid>
+              <Grid size={6}>
+                <Card
+                  variant="outlined"
+                  sx={{
+                    bgcolor: "grey.50",
+                    minHeight: "80px",
+                    display: "flex",
+                    alignItems: "center",
+                    p: 0,
+                  }}
+                >
+                  <input
+                    type="text"
+                    placeholder="Other position placeholder"
+                    value={
+                      !userPosition
+                        ? !debate.participants.a
+                          ? positionBStatement
+                          : positionAStatement
+                        : userPosition === "a"
+                        ? positionBStatement
+                        : positionAStatement
+                    }
+                    disabled
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      minHeight: "80px",
+                      border: "none",
+                      outline: "none",
+                      background: "transparent",
+                      textAlign: "center",
+                      fontSize: "1.2rem",
+                      padding: "20px",
+                      color: "#999",
+                      fontFamily: "inherit",
+                    }}
+                  />
+                </Card>
+              </Grid>
+            </Grid>
+
+            {/* Alias Inputs */}
+            <Grid container spacing={4} sx={{ mb: 3 }}>
+              <Grid size={6}>
+                <Card
+                  variant="outlined"
+                  sx={{
+                    minHeight: "80px",
+                    display: "flex",
+                    alignItems: "center",
+                    p: 0,
+                  }}
+                >
+                  <input
+                    type="text"
+                    placeholder="My Alias"
+                    value={userAlias}
+                    onChange={(e) => setUserAlias(e.target.value)}
+                    maxLength={50}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      minHeight: "80px",
+                      border: "none",
+                      outline: "none",
+                      background: "transparent",
+                      textAlign: "center",
+                      fontSize: "1.2rem",
+                      padding: "20px",
+                      fontFamily: "inherit",
+                    }}
+                  />
+                </Card>
+              </Grid>
+              <Grid size={6}>
+                <Card
+                  variant="outlined"
+                  sx={{
+                    bgcolor: "grey.50",
+                    minHeight: "80px",
+                    display: "flex",
+                    alignItems: "center",
+                    p: 0,
+                  }}
+                >
+                  <input
+                    type="text"
+                    placeholder="Other user alias"
+                    value={
+                      userPosition === "a"
+                        ? debate.participants.b?.alias || ""
+                        : debate.participants.a?.alias || ""
+                    }
+                    disabled
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      minHeight: "80px",
+                      border: "none",
+                      outline: "none",
+                      background: "transparent",
+                      textAlign: "center",
+                      fontSize: "1.2rem",
+                      padding: "20px",
+                      color: "#999",
+                      fontFamily: "inherit",
+                    }}
+                  />
+                </Card>
+              </Grid>
+            </Grid>
+
+            {/* Public Debate Toggle */}
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={isPublic}
+                  onChange={(e) => setIsPublic(e.target.checked)}
+                />
+              }
+              label="Public Debate"
+              sx={{ mb: 3 }}
+            />
+
+            {/* Join/Start Button */}
+            <Box sx={{ textAlign: "center", mb: 3 }}>
+              {!userPosition ? (
+                <Card variant="outlined" sx={{ p: 2 }}>
+                  <Button
+                    fullWidth
+                    variant="contained"
+                    color="success"
+                    onClick={joinDebateSimple}
+                    disabled={
+                      !userAlias.trim() ||
+                      (!debate.participants.a && !positionAStatement.trim()) ||
+                      (debate.participants.a && !positionBStatement.trim())
+                    }
+                    sx={{
+                      fontSize: "1.1rem",
+                      fontWeight: "medium",
+                      textTransform: "none",
+                    }}
+                  >
+                    Join Debate
+                  </Button>
+                </Card>
+              ) : !bothPlayersJoined ? (
+                <Typography variant="h6" color="text.secondary">
+                  Waiting Opponent....
+                </Typography>
+              ) : (
+                <Card variant="outlined" sx={{ p: 2 }}>
+                  <Button
+                    fullWidth
+                    variant="contained"
+                    color="success"
+                    onClick={startDebate}
+                    sx={{
+                      fontSize: "1.1rem",
+                      fontWeight: "medium",
+                      textTransform: "none",
+                    }}
+                  >
+                    Start Debate
+                  </Button>
+                </Card>
+              )}
+            </Box>
+
+            {/* Share Link */}
+            {userPosition && !bothPlayersJoined && (
+              <Box sx={{ textAlign: "center" }}>
+                <Button
+                  onClick={() =>
+                    navigator.clipboard.writeText(window.location.href)
+                  }
+                  size="small"
+                  sx={{ textTransform: "none" }}
+                >
+                  📋 Copy invite link
+                </Button>
+              </Box>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Active Debate Interface */}
+      {debate.status === "active" && (
+        <Box>
+          {/* Timer */}
+          <Box sx={{ textAlign: "right", mb: 2 }}>
+            <Typography
+              variant="h4"
+              color="error"
+              sx={{ fontFamily: "monospace" }}
+            >
               {formatTime(timeLeft)}
-            </div>
-            <div className="text-sm text-gray-600">Time Remaining</div>
-          </div>
-        </div>
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Time Remaining
+            </Typography>
+          </Box>
 
-        <h1 className="text-2xl font-bold mb-4">{debate.topic}</h1>
+          {/* Participants */}
+          <Grid container spacing={2} sx={{ mb: 3 }}>
+            <Grid size={6}>
+              <Card sx={{ p: 2, textAlign: "center" }}>
+                <Typography variant="h4">🅰️</Typography>
+                <Typography variant="h6">Position A</Typography>
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  "{debate.positionA}"
+                </Typography>
+                {debate.participants.a ? (
+                  <Box>
+                    <img
+                      src={debate.participants.a.photoURL}
+                      alt={debate.participants.a.name}
+                      style={{ width: 32, height: 32, borderRadius: "50%" }}
+                    />
+                    <Typography variant="caption" sx={{ display: "block" }}>
+                      {debate.participants.a.alias}
+                    </Typography>
+                  </Box>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    Waiting for player...
+                  </Typography>
+                )}
+              </Card>
+            </Grid>
 
-        <div className="grid grid-cols-2 gap-4">
-          {/* Pro Participant */}
-          <div
-            className={`p-4 rounded-lg border-2 ${
-              debate.participants.pro
-                ? "border-green-500 bg-green-50"
-                : "border-gray-200"
-            }`}
-          >
-            <div className="text-center">
-              <div className="text-2xl mb-2">👍</div>
-              <div className="font-semibold text-green-700">Pro Position</div>
-              {debate.participants.pro ? (
-                <div className="mt-2">
-                  <img
-                    src={debate.participants.pro.photoURL}
-                    alt={debate.participants.pro.name}
-                    className="w-8 h-8 rounded-full mx-auto mb-1"
-                  />
-                  <div className="text-sm">{debate.participants.pro.name}</div>
-                </div>
-              ) : (
-                <div className="text-sm text-gray-500 mt-2">
-                  Waiting for player...
-                </div>
-              )}
-            </div>
-          </div>
+            <Grid size={6}>
+              <Card sx={{ p: 2, textAlign: "center" }}>
+                <Typography variant="h4">🅱️</Typography>
+                <Typography variant="h6">Position B</Typography>
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  "{debate.positionB}"
+                </Typography>
+                {debate.participants.b ? (
+                  <Box>
+                    <img
+                      src={debate.participants.b.photoURL}
+                      alt={debate.participants.b.name}
+                      style={{ width: 32, height: 32, borderRadius: "50%" }}
+                    />
+                    <Typography variant="caption" sx={{ display: "block" }}>
+                      {debate.participants.b.alias}
+                    </Typography>
+                  </Box>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    Waiting for player...
+                  </Typography>
+                )}
+              </Card>
+            </Grid>
+          </Grid>
 
-          {/* Con Participant */}
-          <div
-            className={`p-4 rounded-lg border-2 ${
-              debate.participants.con
-                ? "border-red-500 bg-red-50"
-                : "border-gray-200"
-            }`}
-          >
-            <div className="text-center">
-              <div className="text-2xl mb-2">👎</div>
-              <div className="font-semibold text-red-700">Con Position</div>
-              {debate.participants.con ? (
-                <div className="mt-2">
-                  <img
-                    src={debate.participants.con.photoURL}
-                    alt={debate.participants.con.name}
-                    className="w-8 h-8 rounded-full mx-auto mb-1"
-                  />
-                  <div className="text-sm">{debate.participants.con.name}</div>
-                </div>
-              ) : (
-                <div className="text-sm text-gray-500 mt-2">
-                  Waiting for player...
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Status */}
-        <div className="mt-4 text-center">
-          {debate.status === "waiting_for_opponent" && (
-            <div className="text-orange-600 font-semibold">
-              Waiting for opponent to join...
-            </div>
-          )}
-          {debate.status === "active" && (
-            <div className="text-green-600 font-semibold">
+          {/* Status */}
+          <Card sx={{ p: 2, mb: 3, textAlign: "center" }}>
+            <Typography variant="h6">
               Round {debate.round} of {debate.maxRounds} •{" "}
               {isMyTurn() ? "Your Turn!" : "Opponent's Turn"}
-            </div>
-          )}
-          {debate.status === "completed" && (
-            <div className="text-blue-600 font-semibold">Debate Completed!</div>
-          )}
-        </div>
-      </div>
+            </Typography>
+          </Card>
 
-      {/* Join Button */}
-      {canJoin && (
-        <div className="bg-white rounded-xl shadow-lg p-6 mb-6 text-center">
-          <h3 className="text-xl font-semibold mb-4">Join this debate!</h3>
-          <button
-            onClick={joinDebate}
-            className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
-          >
-            Join as {debate.participants.pro ? "Con (Against)" : "Pro (For)"}
-          </button>
-        </div>
-      )}
+          {/* Arguments */}
+          <Card sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h5" sx={{ mb: 2 }}>
+              Arguments
+            </Typography>
+            {debateArguments.length === 0 ? (
+              <Box sx={{ textAlign: "center", py: 4 }}>
+                <Typography color="text.secondary">
+                  No arguments yet. Be the first to make your case!
+                </Typography>
+              </Box>
+            ) : (
+              debateArguments.map((arg) => (
+                <Card key={arg.id} sx={{ mb: 2, p: 2 }}>
+                  <Box
+                    sx={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      mb: 1,
+                    }}
+                  >
+                    <Typography variant="caption" sx={{ fontWeight: "bold" }}>
+                      {arg.authorAlias || arg.authorName} •{" "}
+                      {arg.position === "a" ? "Position A" : "Position B"} •
+                      Round {arg.round}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {arg.timestamp?.toDate?.()?.toLocaleTimeString() ||
+                        "Just now"}
+                    </Typography>
+                  </Box>
+                  <Typography sx={{ mb: 2 }}>{arg.text}</Typography>
 
-      {/* Arguments */}
-      <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-        <h3 className="text-xl font-semibold mb-4">Arguments</h3>
-        <div className="space-y-4">
-          {debateArguments.length === 0 ? (
-            <div className="text-center text-gray-500 py-8">
-              No arguments yet. Be the first to make your case!
-            </div>
-          ) : (
-            debateArguments.map((arg) => (
-              <div
-                key={arg.id}
-                className={`p-4 rounded-lg ${
-                  arg.position === "pro"
-                    ? "bg-green-100 border-l-4 border-green-500"
-                    : "bg-red-100 border-l-4 border-red-500"
-                }`}
+                  {arg.aiScore !== undefined && (
+                    <Card variant="outlined" sx={{ p: 2 }}>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          mb: 1,
+                        }}
+                      >
+                        <Typography
+                          variant="caption"
+                          sx={{ fontWeight: "bold" }}
+                        >
+                          🤖 AI Analysis
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          sx={{ fontWeight: "bold" }}
+                        >
+                          {arg.aiScore.toFixed(1)}/10
+                        </Typography>
+                      </Box>
+                      <Typography variant="body2" color="text.secondary">
+                        {arg.aiAnalysis?.reasoning}
+                      </Typography>
+                    </Card>
+                  )}
+                </Card>
+              ))
+            )}
+          </Card>
+
+          {/* Input Area */}
+          {userPosition && (
+            <Card sx={{ p: 3 }}>
+              <Box
+                sx={{ display: "flex", justifyContent: "space-between", mb: 2 }}
               >
-                <div className="flex justify-between items-start mb-2">
-                  <div className="font-semibold text-sm">
-                    {arg.authorName} • {arg.position === "pro" ? "Pro" : "Con"}{" "}
-                    • Round {arg.round}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {arg.timestamp?.toDate?.()?.toLocaleTimeString() ||
-                      "Just now"}
-                  </div>
-                </div>
-                <div className="text-gray-800">{arg.text}</div>
-              </div>
-            ))
+                <Typography variant="h6">
+                  {isMyTurn() ? "Your Turn" : "Wait for your turn"}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {currentArgument.length}/500 characters
+                </Typography>
+              </Box>
+
+              <TextField
+                fullWidth
+                multiline
+                rows={4}
+                value={currentArgument}
+                onChange={(e) => setCurrentArgument(e.target.value)}
+                placeholder={
+                  isMyTurn()
+                    ? "Type your argument here..."
+                    : "Wait for your opponent..."
+                }
+                disabled={!isMyTurn()}
+                inputProps={{ maxLength: 500 }}
+                sx={{ mb: 2 }}
+              />
+
+              <Box
+                sx={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  Round {debate.round} of {debate.maxRounds}
+                </Typography>
+                <Button
+                  variant="contained"
+                  onClick={submitArgument}
+                  disabled={
+                    !isMyTurn() || !currentArgument.trim() || submitting
+                  }
+                >
+                  {submitting
+                    ? "Submitting & AI Scoring..."
+                    : "Submit Argument"}
+                </Button>
+              </Box>
+            </Card>
           )}
-        </div>
-      </div>
-
-      {/* Input Area */}
-      {userPosition && debate.status === "active" && (
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-xl font-semibold">
-              {isMyTurn() ? "Your Turn" : "Wait for your turn"}
-            </h3>
-            <div className="text-sm text-gray-600">
-              {currentArgument.length}/500 characters
-            </div>
-          </div>
-
-          <textarea
-            value={currentArgument}
-            onChange={(e) => setCurrentArgument(e.target.value)}
-            placeholder={
-              isMyTurn()
-                ? "Type your argument here..."
-                : "Wait for your opponent..."
-            }
-            disabled={!isMyTurn()}
-            maxLength={500}
-            className="w-full h-32 p-3 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
-          />
-
-          <div className="flex justify-between items-center mt-4">
-            <div className="text-sm text-gray-600">
-              Round {debate.round} of {debate.maxRounds}
-            </div>
-            <button
-              onClick={submitArgument}
-              disabled={!isMyTurn() || !currentArgument.trim()}
-              className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Submit Argument
-            </button>
-          </div>
-        </div>
+        </Box>
       )}
-    </div>
+    </Box>
   );
 }
