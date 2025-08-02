@@ -31,11 +31,14 @@ export default function CreateDebate({ onDebateCreated }: CreateDebateProps) {
         participants: {},
         joinRequests: {}, // Initialize empty join requests
         createdAt: serverTimestamp(),
-        timeLimit: 15 * 60, // 15 minutes in seconds
+        timeLimit: 20 * 60, // 20 minutes total debate time
+        roundTimeLimit: 2 * 60, // 2 minutes per round
         isExtended: false,
         currentTurn: null,
+        currentRoundTimeLeft: null,
+        roundStartedAt: null,
         round: 0,
-        maxRounds: 3,
+        maxRounds: 5, // 5 rounds each as specified
       });
 
       console.log("✅ Debate created:", debateRef.id);
@@ -90,7 +93,7 @@ export default function CreateDebate({ onDebateCreated }: CreateDebateProps) {
         </button>
 
         <p className="text-sm text-gray-600 text-center">
-          You'll set up the debate positions in the next step
+          You&apos;ll set up the debate positions in the next step
         </p>
       </form>
     </div>

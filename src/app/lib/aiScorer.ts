@@ -26,6 +26,14 @@ export async function scoreArgument(
   previousArguments: Array<{ text: string; position: "a" | "b" }>
 ): Promise<ArgumentScore> {
   try {
+    // Validate API key format
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY environment variable is not set");
+    }
+    if (!apiKey.startsWith('sk-')) {
+      throw new Error(`Invalid API key format. Expected key to start with 'sk-' but got: ${apiKey.substring(0, 10)}...`);
+    }
     const context =
       previousArguments.length > 0
         ? `Previous arguments in this debate:\n${previousArguments
@@ -60,7 +68,7 @@ Scoring criteria:
 - 0-1: Poor reasoning, no evidence, irrelevant or fallacious`;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.3,
       max_tokens: 500,
@@ -80,15 +88,14 @@ Scoring criteria:
     return analysis;
   } catch (error) {
     console.error("Error scoring argument:", error);
+    console.error("Error details:", {
+      message: error instanceof Error ? error.message : "Unknown error",
+      stack: error instanceof Error ? error.stack : undefined,
+      type: typeof error,
+    });
 
-    // Fallback scoring if AI fails
-    return {
-      score: 5.0,
-      reasoning: "Unable to analyze argument at this time. Please try again.",
-      strengths: ["Argument submitted successfully"],
-      weaknesses: ["AI analysis temporarily unavailable"],
-      logicalFallacies: [],
-    };
+    // Throw the error instead of fallback so we can see what's wrong
+    throw error;
   }
 }
 
@@ -132,7 +139,7 @@ Provide analysis in this JSON format:
 Consider: logical consistency, evidence quality, addressing opponent's points, overall persuasiveness.`;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.3,
       max_tokens: 300,

@@ -34,17 +34,19 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Error in score-argument API:", error);
 
+    // Return detailed error information for debugging
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorStack = error instanceof Error ? error.stack : undefined;
+
     return NextResponse.json(
       {
         error: "Failed to score argument",
-        score: {
-          score: 5.0,
-          reasoning:
-            "AI analysis temporarily unavailable. Your argument has been recorded.",
-          strengths: ["Argument submitted successfully"],
-          weaknesses: ["AI scoring will be available soon"],
-          logicalFallacies: [],
-        },
+        details: {
+          message: errorMessage,
+          stack: errorStack,
+          type: typeof error,
+          apiKey: process.env.OPENAI_API_KEY ? "API key is set" : "API key is missing",
+        }
       },
       { status: 500 }
     );
