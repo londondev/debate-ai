@@ -372,7 +372,8 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
         console.log("🏆 Analysis data:", result.analysis);
         console.log("🏆 Winner value:", result.analysis?.winner);
         setDebateAnalysis(result.analysis);
-        setShowResultsModal(true);
+        // Results now show inline, no need for automatic modal
+        // setShowResultsModal(true);
       } else {
         const error = await response.json();
         console.error("❌ Debate analysis failed:", error);
@@ -386,11 +387,13 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
           bScore: bAvg,
           summary: `Analysis failed. Basic scoring: Position A averaged ${aAvg.toFixed(1)}, Position B averaged ${bAvg.toFixed(1)}.`
         });
-        setShowResultsModal(true);
+        // Results now show inline, no need for automatic modal
+        // setShowResultsModal(true);
       }
     } catch (error) {
       console.error("Error analyzing debate:", error);
-      setShowResultsModal(true); // Show modal even on error
+      // Error handling - results will show inline with error message
+      // setShowResultsModal(true);
     } finally {
       setAnalyzingResults(false);
     }
@@ -1182,8 +1185,8 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
         </Card>
       )}
 
-      {/* Active Debate Interface */}
-      {debate.status === "active" && (
+      {/* Debate Interface - Active and Completed */}
+      {(debate.status === "active" || debate.status === "completed") && (
         <Box sx={{ height: "100vh", display: "flex", flexDirection: "column" }}>
           {/* Header with Title and Timers */}
           <Card sx={{ mb: 2, p: 3, background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", color: "white" }}>
@@ -1433,6 +1436,133 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
               </Card>
             </Grid>
           </Grid>
+
+          {/* Inline Results Section - Only show when debate is completed */}
+          {debate.status === "completed" && (
+            <Card sx={{ 
+              mt: 3, 
+              p: 4, 
+              background: "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)", 
+              color: "white",
+              textAlign: "center"
+            }}>
+              <Typography variant="h4" sx={{ fontWeight: "bold", mb: 3 }}>
+                🏆 Debate Complete!
+              </Typography>
+              
+              {analyzingResults ? (
+                <Box>
+                  <Typography variant="h6" sx={{ mb: 2 }}>
+                    🤖 Analyzing results...
+                  </Typography>
+                  <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                    Please wait while our AI evaluates all arguments
+                  </Typography>
+                </Box>
+              ) : debateAnalysis ? (
+                <Box>
+                  {/* Winner Declaration */}
+                  <Card sx={{ 
+                    p: 3, 
+                    mb: 3, 
+                    textAlign: "center", 
+                    background: debateAnalysis.winner === "tie" 
+                      ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
+                      : debateAnalysis.winner === "a" 
+                        ? "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)" 
+                        : debateAnalysis.winner === "b"
+                          ? "linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)"
+                          : "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
+                    color: "white"
+                  }}>
+                    <Typography variant="h5" sx={{ fontWeight: "bold", mb: 2 }}>
+                      {debateAnalysis.winner === "tie" 
+                        ? "🤝 It's a Tie!" 
+                        : debateAnalysis.winner 
+                          ? `🎉 Winner: Position ${debateAnalysis.winner.toUpperCase()}`
+                          : "🏁 Debate Complete"
+                      }
+                    </Typography>
+                    
+                    <Box sx={{ display: "flex", justifyContent: "space-around", mb: 2 }}>
+                      <Box>
+                        <Typography variant="h6">{debate?.participants?.a?.alias || "Position A"}</Typography>
+                        <Typography variant="h4" sx={{ fontWeight: "bold" }}>
+                          {debateAnalysis.aScore?.toFixed(1) || "0.0"}/10
+                        </Typography>
+                      </Box>
+                      <Box>
+                        <Typography variant="h6">{debate?.participants?.b?.alias || "Position B"}</Typography>
+                        <Typography variant="h4" sx={{ fontWeight: "bold" }}>
+                          {debateAnalysis.bScore?.toFixed(1) || "0.0"}/10
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </Card>
+
+                  {/* AI Analysis Summary */}
+                  <Card sx={{ p: 3, mb: 3, backgroundColor: "rgba(255,255,255,0.1)", backdropFilter: "blur(10px)" }}>
+                    <Typography variant="h6" sx={{ mb: 2, fontWeight: "bold" }}>
+                      🤖 AI Analysis
+                    </Typography>
+                    <Typography variant="body1" sx={{ lineHeight: 1.6 }}>
+                      {debateAnalysis.summary || "Analysis completed successfully."}
+                    </Typography>
+                  </Card>
+
+                  {/* Action Buttons */}
+                  <Box sx={{ display: "flex", gap: 2, justifyContent: "center", flexWrap: "wrap" }}>
+                    <Button
+                      variant="contained"
+                      color="secondary"
+                      size="large"
+                      sx={{ minWidth: 200, backgroundColor: "rgba(255,255,255,0.2)", "&:hover": { backgroundColor: "rgba(255,255,255,0.3)" } }}
+                      onClick={() => {
+                        alert("Extension feature coming soon! This will require a $1.99 payment or subscription.");
+                      }}
+                    >
+                      🚀 Extend Discussion
+                      <Typography variant="caption" sx={{ display: "block", fontSize: "0.7rem" }}>
+                        $1.99 or Premium
+                      </Typography>
+                    </Button>
+
+                    <Button
+                      variant="outlined"
+                      color="inherit"
+                      size="large"
+                      sx={{ minWidth: 200, borderColor: "rgba(255,255,255,0.5)", color: "white" }}
+                      onClick={() => {
+                        alert("Appeal functionality will be added soon!");
+                      }}
+                    >
+                      ⚖️ Appeal Result
+                      <Typography variant="caption" sx={{ display: "block", fontSize: "0.7rem" }}>
+                        Challenge AI decision
+                      </Typography>
+                    </Button>
+
+                    <Button
+                      variant="outlined"
+                      color="inherit"
+                      size="large"
+                      sx={{ minWidth: 200, borderColor: "rgba(255,255,255,0.5)", color: "white" }}
+                      onClick={() => setShowResultsModal(true)}
+                    >
+                      📊 Detailed Results
+                      <Typography variant="caption" sx={{ display: "block", fontSize: "0.7rem" }}>
+                        View in popup
+                      </Typography>
+                    </Button>
+                  </Box>
+                </Box>
+              ) : (
+                <Typography variant="h6" color="error">
+                  Unable to analyze debate results
+                </Typography>
+              )}
+            </Card>
+          )}
         </Box>
       )}
 
