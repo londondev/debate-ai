@@ -96,6 +96,13 @@ interface Debate {
   createdAt: unknown;
   creatorId: string;
   joinRequests?: Record<string, JoinRequest>;
+  analysis?: {
+    winner: "a" | "b" | "tie";
+    aScore: number;
+    bScore: number;
+    summary: string;
+    analyzedAt: unknown;
+  };
 }
 
 export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
@@ -266,12 +273,26 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
     setPermissionStatus(null);
   }, [user, debate]);
 
-  // Trigger final analysis when debate is completed
+  // Load analysis from database or trigger calculation when debate is completed
   useEffect(() => {
-    if (debate?.status === "completed" && !debateAnalysis && !analyzingResults) {
-      analyzeDebateResults();
+    if (debate?.status === "completed") {
+      if (debate.analysis) {
+        // Use persisted analysis from database
+        console.log("📊 Loading persisted analysis from database");
+        setDebateAnalysis({
+          winner: debate.analysis.winner,
+          aScore: debate.analysis.aScore,
+          bScore: debate.analysis.bScore,
+          summary: debate.analysis.summary
+        });
+        setShowResultsModal(true);
+      } else if (!debateAnalysis && !analyzingResults) {
+        // Calculate analysis for the first time
+        console.log("🤖 No analysis found, calculating for first time");
+        analyzeDebateResults();
+      }
     }
-  }, [debate?.status, debateAnalysis, analyzingResults]);
+  }, [debate?.status, debate?.analysis, debateAnalysis, analyzingResults]);
 
   // Subscribe to join request updates for current user
   useEffect(() => {
@@ -371,9 +392,23 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
         console.log("🏆 Debate analysis complete:", result);
         console.log("🏆 Analysis data:", result.analysis);
         console.log("🏆 Winner value:", result.analysis?.winner);
+        
+        // Save analysis to Firestore for persistence
+        const analysisData = {
+          winner: result.analysis.winner,
+          aScore: result.analysis.aScore,
+          bScore: result.analysis.bScore,
+          summary: result.analysis.summary,
+          analyzedAt: serverTimestamp()
+        };
+        
+        await updateDoc(doc(db, "debates", debateId), {
+          analysis: analysisData
+        });
+        
+        console.log("💾 Analysis saved to database");
         setDebateAnalysis(result.analysis);
-        // Results now show inline, no need for automatic modal
-        // setShowResultsModal(true);
+        setShowResultsModal(true);
       } else {
         const error = await response.json();
         console.error("❌ Debate analysis failed:", error);
@@ -381,19 +416,31 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
         const aAvg = aArguments.reduce((sum, arg) => sum + arg.score, 0) / aArguments.length || 0;
         const bAvg = bArguments.reduce((sum, arg) => sum + arg.score, 0) / bArguments.length || 0;
         
-        setDebateAnalysis({
-          winner: aAvg > bAvg ? "a" : bAvg > aAvg ? "b" : "tie",
+        const winner: "a" | "b" | "tie" = aAvg > bAvg ? "a" : bAvg > aAvg ? "b" : "tie";
+        const fallbackAnalysis = {
+          winner,
           aScore: aAvg,
           bScore: bAvg,
           summary: `Analysis failed. Basic scoring: Position A averaged ${aAvg.toFixed(1)}, Position B averaged ${bAvg.toFixed(1)}.`
+        };
+        
+        // Save fallback analysis to database
+        const analysisData = {
+          ...fallbackAnalysis,
+          analyzedAt: serverTimestamp()
+        };
+        
+        await updateDoc(doc(db, "debates", debateId), {
+          analysis: analysisData
         });
-        // Results now show inline, no need for automatic modal
-        // setShowResultsModal(true);
+        
+        console.log("💾 Fallback analysis saved to database");
+        setDebateAnalysis(fallbackAnalysis);
+        setShowResultsModal(true);
       }
     } catch (error) {
       console.error("Error analyzing debate:", error);
-      // Error handling - results will show inline with error message
-      // setShowResultsModal(true);
+      setShowResultsModal(true); // Show modal even on error
     } finally {
       setAnalyzingResults(false);
     }
@@ -695,14 +742,15 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
   };
 
   const getNextTurn = (): string => {
-    if (!debate || !user) return "";
+    if (!debate) return "";
 
     const currentUserPosition = getUserPosition();
     if (currentUserPosition === "a") {
       return debate.participants.b?.uid || "";
-    } else {
+    } else if (currentUserPosition === "b") {
       return debate.participants.a?.uid || "";
     }
+    return "";
   };
 
   const shouldAdvanceRound = (): boolean => {
@@ -1187,7 +1235,7 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
 
       {/* Debate Interface - Active and Completed */}
       {(debate.status === "active" || debate.status === "completed") && (
-        <Box sx={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+        <Box sx={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
           {/* Header with Title and Timers */}
           <Card sx={{ mb: 2, p: 3, background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", color: "white" }}>
             <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
@@ -1195,44 +1243,82 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
                 {debate.topic}
               </Typography>
               
-              {/* Total Debate Timer */}
-              <Box sx={{ textAlign: "center", mx: 3 }}>
-                <Typography variant="h4" sx={{ fontFamily: "monospace", fontWeight: "bold" }}>
-                  {formatTime(timeLeft)}
-                </Typography>
-                <Typography variant="caption" sx={{ opacity: 0.9 }}>
-                  Total Time
-                </Typography>
-              </Box>
-              
-              {/* Round Timer */}
-              <Box sx={{ textAlign: "center" }}>
-                <Typography variant="h4" sx={{ fontFamily: "monospace", fontWeight: "bold", color: roundTimeLeft <= 30 ? "#ff5722" : "#ffeb3b" }}>
-                  {formatTime(roundTimeLeft)}
-                </Typography>
-                <Typography variant="caption" sx={{ opacity: 0.9 }}>
-                  Round Time
-                </Typography>
-              </Box>
+              {debate.status === "completed" && debateAnalysis ? (
+                /* Winner Info when completed */
+                <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+                  <Box sx={{ textAlign: "center" }}>
+                    <Typography variant="h6" sx={{ fontWeight: "bold", mb: 1 }}>
+                      {debateAnalysis.winner === "tie" 
+                        ? "🤝 It's a Tie!" 
+                        : `Debate is won by ${
+                            debateAnalysis.winner === "a" 
+                              ? debate.participants.a?.alias || "Position A"
+                              : debate.participants.b?.alias || "Position B"
+                          } with position ${debateAnalysis.winner.toUpperCase()}`
+                      }
+                    </Typography>
+                    <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                      Position A: {debateAnalysis.aScore?.toFixed(1) || "0.0"}/10 | Position B: {debateAnalysis.bScore?.toFixed(1) || "0.0"}/10
+                    </Typography>
+                  </Box>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    sx={{ 
+                      color: "white", 
+                      borderColor: "rgba(255,255,255,0.5)",
+                      "&:hover": { borderColor: "white" }
+                    }}
+                    onClick={() => setShowResultsModal(true)}
+                  >
+                    View Details
+                  </Button>
+                </Box>
+              ) : (
+                /* Timers when active */
+                <>
+                  {/* Total Debate Timer */}
+                  <Box sx={{ textAlign: "center", mx: 3 }}>
+                    <Typography variant="h4" sx={{ fontFamily: "monospace", fontWeight: "bold" }}>
+                      {formatTime(timeLeft)}
+                    </Typography>
+                    <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                      Total Time
+                    </Typography>
+                  </Box>
+                  
+                  {/* Round Timer */}
+                  <Box sx={{ textAlign: "center" }}>
+                    <Typography variant="h4" sx={{ fontFamily: "monospace", fontWeight: "bold", color: roundTimeLeft <= 30 ? "#ff5722" : "#ffeb3b" }}>
+                      {formatTime(roundTimeLeft)}
+                    </Typography>
+                    <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                      Round Time
+                    </Typography>
+                  </Box>
+                </>
+              )}
             </Box>
             
-            {/* Round and Turn Indicator */}
-            <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center" }}>
-              <Typography variant="h6" sx={{ mr: 2 }}>
-                Round {debate.round} of 5
-              </Typography>
-              <Box sx={{ 
-                px: 2, 
-                py: 1, 
-                backgroundColor: "rgba(255,255,255,0.2)", 
-                borderRadius: "20px",
-                backdropFilter: "blur(10px)"
-              }}>
-                <Typography variant="body1" sx={{ fontWeight: "bold" }}>
-                  {isMyTurn() ? "🟢 Your Turn" : "🔴 Opponent's Turn"}
+            {/* Round and Turn Indicator - Only show when debate is active */}
+            {debate.status === "active" && (
+              <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center" }}>
+                <Typography variant="h6" sx={{ mr: 2 }}>
+                  Round {debate.round} of {debate.maxRounds}
                 </Typography>
+                <Box sx={{ 
+                  px: 2, 
+                  py: 1, 
+                  backgroundColor: "rgba(255,255,255,0.2)", 
+                  borderRadius: "20px",
+                  backdropFilter: "blur(10px)"
+                }}>
+                  <Typography variant="body1" sx={{ fontWeight: "bold" }}>
+                    {isMyTurn() ? "🟢 Your Turn" : "🔴 Opponent's Turn"}
+                  </Typography>
+                </Box>
               </Box>
-            </Box>
+            )}
           </Card>
 
           {/* Two-Column Debate Layout */}
@@ -1305,8 +1391,8 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
                     ))}
                 </Box>
 
-                {/* My Input Area */}
-                {userPosition && (
+                {/* My Input Area - Only show when debate is active */}
+                {userPosition && debate.status === "active" && (
                   <Box sx={{ p: 2, borderTop: "1px solid rgba(255,255,255,0.2)" }}>
                     <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}>
                       <Typography variant="body2" sx={{ opacity: 0.9 }}>
@@ -1427,142 +1513,18 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
                     ))}
                 </Box>
 
-                {/* Opponent Status */}
-                <Box sx={{ p: 2, borderTop: "1px solid rgba(255,255,255,0.2)", textAlign: "center" }}>
-                  <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                    {!isMyTurn() ? "🟡 Opponent is thinking..." : "⏸️ Waiting for their turn"}
-                  </Typography>
-                </Box>
+                {/* Opponent Status - Only show when debate is active */}
+                {debate.status === "active" && (
+                  <Box sx={{ p: 2, borderTop: "1px solid rgba(255,255,255,0.2)", textAlign: "center" }}>
+                    <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                      {!isMyTurn() ? "🟡 Opponent is thinking..." : "⏸️ Waiting for their turn"}
+                    </Typography>
+                  </Box>
+                )}
               </Card>
             </Grid>
           </Grid>
 
-          {/* Inline Results Section - Only show when debate is completed */}
-          {debate.status === "completed" && (
-            <Card sx={{ 
-              mt: 3, 
-              p: 4, 
-              background: "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)", 
-              color: "white",
-              textAlign: "center"
-            }}>
-              <Typography variant="h4" sx={{ fontWeight: "bold", mb: 3 }}>
-                🏆 Debate Complete!
-              </Typography>
-              
-              {analyzingResults ? (
-                <Box>
-                  <Typography variant="h6" sx={{ mb: 2 }}>
-                    🤖 Analyzing results...
-                  </Typography>
-                  <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                    Please wait while our AI evaluates all arguments
-                  </Typography>
-                </Box>
-              ) : debateAnalysis ? (
-                <Box>
-                  {/* Winner Declaration */}
-                  <Card sx={{ 
-                    p: 3, 
-                    mb: 3, 
-                    textAlign: "center", 
-                    background: debateAnalysis.winner === "tie" 
-                      ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
-                      : debateAnalysis.winner === "a" 
-                        ? "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)" 
-                        : debateAnalysis.winner === "b"
-                          ? "linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)"
-                          : "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
-                    color: "white"
-                  }}>
-                    <Typography variant="h5" sx={{ fontWeight: "bold", mb: 2 }}>
-                      {debateAnalysis.winner === "tie" 
-                        ? "🤝 It's a Tie!" 
-                        : debateAnalysis.winner 
-                          ? `🎉 Winner: Position ${debateAnalysis.winner.toUpperCase()}`
-                          : "🏁 Debate Complete"
-                      }
-                    </Typography>
-                    
-                    <Box sx={{ display: "flex", justifyContent: "space-around", mb: 2 }}>
-                      <Box>
-                        <Typography variant="h6">{debate?.participants?.a?.alias || "Position A"}</Typography>
-                        <Typography variant="h4" sx={{ fontWeight: "bold" }}>
-                          {debateAnalysis.aScore?.toFixed(1) || "0.0"}/10
-                        </Typography>
-                      </Box>
-                      <Box>
-                        <Typography variant="h6">{debate?.participants?.b?.alias || "Position B"}</Typography>
-                        <Typography variant="h4" sx={{ fontWeight: "bold" }}>
-                          {debateAnalysis.bScore?.toFixed(1) || "0.0"}/10
-                        </Typography>
-                      </Box>
-                    </Box>
-                  </Card>
-
-                  {/* AI Analysis Summary */}
-                  <Card sx={{ p: 3, mb: 3, backgroundColor: "rgba(255,255,255,0.1)", backdropFilter: "blur(10px)" }}>
-                    <Typography variant="h6" sx={{ mb: 2, fontWeight: "bold" }}>
-                      🤖 AI Analysis
-                    </Typography>
-                    <Typography variant="body1" sx={{ lineHeight: 1.6 }}>
-                      {debateAnalysis.summary || "Analysis completed successfully."}
-                    </Typography>
-                  </Card>
-
-                  {/* Action Buttons */}
-                  <Box sx={{ display: "flex", gap: 2, justifyContent: "center", flexWrap: "wrap" }}>
-                    <Button
-                      variant="contained"
-                      color="secondary"
-                      size="large"
-                      sx={{ minWidth: 200, backgroundColor: "rgba(255,255,255,0.2)", "&:hover": { backgroundColor: "rgba(255,255,255,0.3)" } }}
-                      onClick={() => {
-                        alert("Extension feature coming soon! This will require a $1.99 payment or subscription.");
-                      }}
-                    >
-                      🚀 Extend Discussion
-                      <Typography variant="caption" sx={{ display: "block", fontSize: "0.7rem" }}>
-                        $1.99 or Premium
-                      </Typography>
-                    </Button>
-
-                    <Button
-                      variant="outlined"
-                      color="inherit"
-                      size="large"
-                      sx={{ minWidth: 200, borderColor: "rgba(255,255,255,0.5)", color: "white" }}
-                      onClick={() => {
-                        alert("Appeal functionality will be added soon!");
-                      }}
-                    >
-                      ⚖️ Appeal Result
-                      <Typography variant="caption" sx={{ display: "block", fontSize: "0.7rem" }}>
-                        Challenge AI decision
-                      </Typography>
-                    </Button>
-
-                    <Button
-                      variant="outlined"
-                      color="inherit"
-                      size="large"
-                      sx={{ minWidth: 200, borderColor: "rgba(255,255,255,0.5)", color: "white" }}
-                      onClick={() => setShowResultsModal(true)}
-                    >
-                      📊 Detailed Results
-                      <Typography variant="caption" sx={{ display: "block", fontSize: "0.7rem" }}>
-                        View in popup
-                      </Typography>
-                    </Button>
-                  </Box>
-                </Box>
-              ) : (
-                <Typography variant="h6" color="error">
-                  Unable to analyze debate results
-                </Typography>
-              )}
-            </Card>
-          )}
         </Box>
       )}
 
@@ -1646,10 +1608,8 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle sx={{ textAlign: "center", pb: 1 }}>
-          <Typography variant="h4" sx={{ fontWeight: "bold", color: "primary.main" }}>
-            🏆 Debate Complete!
-          </Typography>
+        <DialogTitle sx={{ textAlign: "center", pb: 1, fontWeight: "bold", color: "primary.main" }}>
+          🏆 Debate Complete!
         </DialogTitle>
         
         <DialogContent sx={{ pt: 2 }}>
