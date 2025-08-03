@@ -12,6 +12,7 @@ import {
   query,
   orderBy,
   deleteField,
+  type UpdateData,
 } from "firebase/firestore";
 import { useAuthState } from "react-firebase-hooks/auth";
 import {
@@ -499,7 +500,7 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
         }
       };
 
-      const updateData: {[key: string]: unknown} = {
+      const updateData: UpdateData<any> = {
         participants: updatedParticipantsObject,
         [`position${availablePosition.toUpperCase()}`]:
           positionStatement.trim(),
@@ -728,7 +729,7 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
       };
 
       // For existing debates without joinRequests field, initialize it
-      const updateData: {[key: string]: unknown} = {};
+      const updateData: UpdateData<any> = {};
       if (!debate.joinRequests) {
         updateData.joinRequests = {
           [requestId]: joinRequest
