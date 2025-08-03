@@ -499,7 +499,7 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
         }
       };
 
-      const updateData: Record<string, any> = {
+      const updateData: {[key: string]: unknown} = {
         participants: updatedParticipantsObject,
         [`position${availablePosition.toUpperCase()}`]:
           positionStatement.trim(),
@@ -728,7 +728,7 @@ export default function DebateRoom({ debateId, onBack }: DebateRoomProps) {
       };
 
       // For existing debates without joinRequests field, initialize it
-      const updateData: Record<string, any> = {};
+      const updateData: {[key: string]: unknown} = {};
       if (!debate.joinRequests) {
         updateData.joinRequests = {
           [requestId]: joinRequest
